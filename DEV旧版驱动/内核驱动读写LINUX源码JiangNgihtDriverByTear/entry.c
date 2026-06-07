@@ -21,7 +21,8 @@
 
 #include <linux/module.h>
 #include <linux/tty.h>
-#include <linux/miscdevice.h>
+#include <linux/kprobes.h>
+#include <linux/uaccess.h>
 #include "comm.h"
 #include "memory.h"
 #include "process.h"
@@ -35,37 +36,26 @@
 	//原项目链接 https://github.com/Jiang-Night/Kernel_driver_hack
 	//泪心驱动完整开源读写内核源码新项目链接 https://github.com/tearhacker/TearGame_KernelDriver_Android_WriteReadMemory
 
-#define DEVICE_NAME "TearGame"
+#if defined(__aarch64__)
+#define TEARGAME_PRCTL_SYMBOL "__arm64_sys_prctl"
+#define TEARGAME_PT_REAL_REGS(pt) ((struct pt_regs *)((pt)->regs[0]))
+#define TEARGAME_PT_REGS_ARG1(pt) ((pt)->regs[0])
+#define TEARGAME_PT_REGS_ARG2(pt) ((pt)->regs[1])
+#define TEARGAME_PT_REGS_ARG3(pt) ((pt)->regs[2])
+#define TEARGAME_PT_REGS_ARG5(pt) ((pt)->regs[4])
+#else
+#error "TearGame only supports arm64"
+#endif
 
-int dispatch_open(struct inode *node, struct file *file)
+static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const arg)
 {
-	return 0;
-}
-
-int dispatch_close(struct inode *node, struct file *file)
-{
-	return 0;
-}
-
-long dispatch_ioctl(struct file *const file, unsigned int const cmd, unsigned long const arg)
-{
-	static COPY_MEMORY cm;
-	static MODULE_BASE mb;
-	static char key[0x100] = {0};
-	static char name[0x100] = {0};
-	static bool is_verified = false;
-
-	if (cmd == OP_INIT_KEY && !is_verified)
-	{
-		if (copy_from_user(key, (void __user *)arg, sizeof(key) - 1) != 0)
-		{
-			return -1;
-		}
-	}
 	switch (cmd)
 	{
+	case OP_INIT_KEY:
+		return 0;
 	case OP_READ_MEM:
 	{
+		COPY_MEMORY cm;
 		if (copy_from_user(&cm, (void __user *)arg, sizeof(cm)) != 0)
 		{
 			return -1;
@@ -78,6 +68,7 @@ long dispatch_ioctl(struct file *const file, unsigned int const cmd, unsigned lo
 	}
 	case OP_WRITE_MEM:
 	{
+		COPY_MEMORY cm;
 		if (copy_from_user(&cm, (void __user *)arg, sizeof(cm)) != 0)
 		{
 			return -1;
@@ -90,6 +81,8 @@ long dispatch_ioctl(struct file *const file, unsigned int const cmd, unsigned lo
 	}
 	case OP_MODULE_BASE:
 	{
+		MODULE_BASE mb;
+		char name[0x100] = {0};
 		if (copy_from_user(&mb, (void __user *)arg, sizeof(mb)) != 0 || copy_from_user(name, (void __user *)mb.name, sizeof(name) - 1) != 0)
 		{
 			return -1;
@@ -102,22 +95,34 @@ long dispatch_ioctl(struct file *const file, unsigned int const cmd, unsigned lo
 		break;
 	}
 	default:
-		break;
+		return -1;
 	}
 	return 0;
 }
 
-struct file_operations dispatch_functions = {
-	.owner = THIS_MODULE,
-	.open = dispatch_open,
-	.release = dispatch_close,
-	.unlocked_ioctl = dispatch_ioctl,
-};
+static int teargame_prctl_handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+	struct pt_regs *real_regs = TEARGAME_PT_REAL_REGS(regs);
+	unsigned long option = TEARGAME_PT_REGS_ARG1(real_regs);
+	unsigned long cmd = TEARGAME_PT_REGS_ARG2(real_regs);
+	unsigned long arg3 = TEARGAME_PT_REGS_ARG3(real_regs);
+	unsigned long arg5 = TEARGAME_PT_REGS_ARG5(real_regs);
+	unsigned int reply = KERNEL_SU_OPTION_REPLY;
 
-struct miscdevice misc = {
-	.minor = MISC_DYNAMIC_MINOR,
-	.name = DEVICE_NAME,
-	.fops = &dispatch_functions,
+	(void)p;
+
+	if (option != KERNEL_SU_OPTION)
+		return 0;
+
+	if (teargame_dispatch_cmd((unsigned int)cmd, arg3) == 0 && arg5)
+		copy_to_user((void __user *)arg5, &reply, sizeof(reply));
+
+	return 0;
+}
+
+static struct kprobe teargame_prctl_kp = {
+	.symbol_name = TEARGAME_PRCTL_SYMBOL,
+	.pre_handler = teargame_prctl_handler_pre,
 };
 
 int __init driver_entry(void)
@@ -132,12 +137,12 @@ int __init driver_entry(void)
 	printk(KERN_INFO "[TearGame] GitHub: github.com/tearhacker\n");
 	printk(KERN_INFO "=============================================\n");
 	
-	ret = misc_register(&misc);
+	ret = register_kprobe(&teargame_prctl_kp);
 	if (ret == 0) {
-		printk(KERN_INFO "[TearGame] Device registered: /dev/%s\n", DEVICE_NAME);
+		printk(KERN_INFO "[TearGame] KernelSU prctl bridge registered\n");
 		printk(KERN_INFO "[TearGame] Driver loaded successfully!\n");
 	} else {
-		printk(KERN_ERR "[TearGame] Failed to register device! ret=%d\n", ret);
+		printk(KERN_ERR "[TearGame] Failed to register prctl bridge! ret=%d\n", ret);
 	}
 	return ret;
 }
@@ -145,8 +150,8 @@ int __init driver_entry(void)
 void __exit driver_unload(void)
 {
 	printk(KERN_INFO "[TearGame] Driver unloading...\n");
-	misc_deregister(&misc);
-	printk(KERN_INFO "[TearGame] Device /dev/%s unregistered\n", DEVICE_NAME);
+	unregister_kprobe(&teargame_prctl_kp);
+	printk(KERN_INFO "[TearGame] KernelSU prctl bridge unregistered\n");
 	printk(KERN_INFO "[TearGame] Goodbye! - by 泪心\n");
 }
 
