@@ -1,6 +1,5 @@
-# Kernel_driver_hack
+﻿# Kernel_driver_hack
 > Android/Linux Kernel driver read and write  memory.
-原版本存在重大问题 根本无法使用 泪心已经完整修复 --  t.me/TearGame
 ##### ~~暂时无法读取bss段内存~~
 
 ##### ~~读取内存过长时会出现错误~~

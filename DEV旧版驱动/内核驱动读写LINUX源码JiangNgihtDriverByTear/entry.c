@@ -1,12 +1,6 @@
-/**
+﻿/**
  * ============================================================================
- * 泪心开源驱动 - TearGame Open Source Driver
  * ============================================================================
- * 作者 (Author): 泪心 (Tear)
- * QQ: 2254013571
- * 邮箱 (Email): tearhacker@outlook.com
- * 电报 (Telegram): t.me/TearGame
- * GitHub: github.com/tearhacker
  * ============================================================================
  * 本项目完全免费开源，代码明文公开
  * This project is completely free and open source with clear code
@@ -44,14 +38,8 @@
 #include "hide_process.h"
 #include "hide_kgsl.h"
 //原作者JiangNight  源码存在严重问题 加载格机 重启  黑砖    加载失败  kernel pacni 各种问题
-//泪心已经彻底修复优化
-	//printk(KERN_INFO "[TearGame] QQ: 2254013571\n");
-	//printk(KERN_INFO "[TearGame] Email: tearhacker@outlook.com\n");
-//printk(KERN_INFO "[TearGame] Telegram: t.me/TearGame\n");
-	//(KERN_INFO "[TearGame] GitHub: github.com/tearhacker\n");
 
 	//原项目链接 https://github.com/Jiang-Night/Kernel_driver_hack
-	//泪心驱动完整开源读写内核源码新项目链接 https://github.com/tearhacker/TearGame_KernelDriver_Android_WriteReadMemory
 
 #if defined(__aarch64__)
 #define TEARGAME_PRCTL_SYMBOL "__arm64_sys_prctl"
@@ -744,11 +732,6 @@ int __init driver_entry(void)
 	int ret;
 	printk(KERN_INFO "=============================================\n");
 	printk(KERN_INFO "[DraKernel] Driver loading...\n");
-	printk(KERN_INFO "[DraKernel] Author: 泪心 (Tear)\n");
-	printk(KERN_INFO "[DraKernel] QQ: 2254013571\n");
-	printk(KERN_INFO "[DraKernel] Email: tearhacker@outlook.com\n");
-	printk(KERN_INFO "[DraKernel] Telegram: t.me/TearGame\n");
-	printk(KERN_INFO "[DraKernel] GitHub: github.com/tearhacker\n");
 	printk(KERN_INFO "=============================================\n");
 
 	fn_task_work_add = (void *)teargame_lookup_symbol("task_work_add");
@@ -788,7 +771,6 @@ void __exit driver_unload(void)
 	linyu_gyro_exit();
 	inline_hook_remove_all();
 	printk(KERN_INFO "[DraKernel] KernelSU prctl bridge unregistered\n");
-	printk(KERN_INFO "[DraKernel] Goodbye! - by 泪心\n");
 }
 
 module_init(driver_entry);
@@ -796,4 +778,3 @@ module_exit(driver_unload);
 
 MODULE_DESCRIPTION("DraKernel Memory Driver");
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("泪心 QQ:2254013571");
