@@ -21,7 +21,14 @@
 
 #include <linux/module.h>
 #include <linux/tty.h>
+#include <linux/anon_inodes.h>
+#include <linux/fcntl.h>
+#include <linux/fdtable.h>
+#include <linux/file.h>
+#include <linux/fs.h>
 #include <linux/kprobes.h>
+#include <linux/slab.h>
+#include <linux/task_work.h>
 #include <linux/uaccess.h>
 #include "comm.h"
 #include "memory.h"
@@ -46,6 +53,14 @@
 #else
 #error "TearGame only supports arm64"
 #endif
+
+#define TEARGAME_FD_NAME "[TearGame]"
+
+struct teargame_install_fd_work
+{
+	struct callback_head cb;
+	int __user *outp;
+};
 
 static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const arg)
 {
@@ -100,23 +115,88 @@ static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const ar
 	return 0;
 }
 
+static long teargame_fd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	(void)file;
+	return teargame_dispatch_cmd(cmd, arg);
+}
+
+static const struct file_operations teargame_fops = {
+	.owner = THIS_MODULE,
+	.unlocked_ioctl = teargame_fd_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = teargame_fd_ioctl,
+#endif
+};
+
+static int teargame_install_fd_to_user(int __user *outp)
+{
+	struct file *filp;
+	int fd;
+
+	if (!outp)
+		return -EINVAL;
+
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0)
+		return fd;
+
+	filp = anon_inode_getfile(TEARGAME_FD_NAME, &teargame_fops, NULL, O_RDWR | O_CLOEXEC);
+	if (IS_ERR(filp))
+	{
+		int ret = PTR_ERR(filp);
+		put_unused_fd(fd);
+		return ret;
+	}
+
+	if (copy_to_user(outp, &fd, sizeof(fd)))
+	{
+		put_unused_fd(fd);
+		fput(filp);
+		return -EFAULT;
+	}
+
+	fd_install(fd, filp);
+	return fd;
+}
+
+static void teargame_install_fd_work_func(struct callback_head *cb)
+{
+	struct teargame_install_fd_work *work = container_of(cb, struct teargame_install_fd_work, cb);
+	int fd = teargame_install_fd_to_user(work->outp);
+
+	if (fd < 0 && work->outp && copy_to_user(work->outp, &fd, sizeof(fd)))
+		pr_debug("[TearGame] failed to copy fd install error: %d\n", fd);
+
+	kfree(work);
+}
+
 static int teargame_prctl_handler_pre(struct kprobe *p, struct pt_regs *regs)
 {
 	struct pt_regs *real_regs = TEARGAME_PT_REAL_REGS(regs);
 	unsigned long option = TEARGAME_PT_REGS_ARG1(real_regs);
 	unsigned long cmd = TEARGAME_PT_REGS_ARG2(real_regs);
 	unsigned long arg3 = TEARGAME_PT_REGS_ARG3(real_regs);
-	unsigned long arg5 = TEARGAME_PT_REGS_ARG5(real_regs);
-	unsigned int reply = KERNEL_SU_OPTION_REPLY;
 
 	(void)p;
 
 	if (option != KERNEL_SU_OPTION)
 		return 0;
 
-	if (teargame_dispatch_cmd((unsigned int)cmd, arg3) == 0 && arg5 &&
-		copy_to_user((void __user *)arg5, &reply, sizeof(reply)) != 0)
-		pr_debug("[TearGame] failed to copy KernelSU prctl reply\n");
+	if (cmd == OP_INIT_KEY)
+	{
+		struct teargame_install_fd_work *work;
+
+		work = kzalloc(sizeof(*work), GFP_ATOMIC);
+		if (!work)
+			return 0;
+
+		work->outp = (int __user *)arg3;
+		work->cb.func = teargame_install_fd_work_func;
+
+		if (task_work_add(current, &work->cb, TWA_RESUME))
+			kfree(work);
+	}
 
 	return 0;
 }
