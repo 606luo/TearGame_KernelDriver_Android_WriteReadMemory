@@ -19,27 +19,31 @@
  * ============================================================================
  */
 
-typedef struct _COPY_MEMORY
+#include <linux/ioctl.h>
+
+typedef struct _request
 {
 	pid_t pid;
 	uintptr_t addr;
 	void *buffer;
 	size_t size;
-} COPY_MEMORY, *PCOPY_MEMORY;
+} request, *Prequest;
 
-typedef struct _MODULE_BASE
-{
-	pid_t pid;
-	char *name;
-	uintptr_t base;
-} MODULE_BASE, *PMODULE_BASE;
+typedef request COPY_MEMORY, *PCOPY_MEMORY;
+
+#define DRA_MARK 'D'
+#define GET_PID _IOW(DRA_MARK, 0, request)
+#define MODULE_BASE _IOW(DRA_MARK, 1, request)
+#define MODULE_BSS _IOW(DRA_MARK, 3, request)
+#define READ_MEM _IOW(DRA_MARK, 4, request)
+#define WRITE_MEM _IOW(DRA_MARK, 5, request)
 
 enum OPERATIONS
 {
 	OP_INIT_KEY = 0x800,
-	OP_READ_MEM = 0x801,
-	OP_WRITE_MEM = 0x802,
-	OP_MODULE_BASE = 0x803,
+	OP_READ_MEM = READ_MEM,
+	OP_WRITE_MEM = WRITE_MEM,
+	OP_MODULE_BASE = MODULE_BASE,
 };
 
 #define KERNEL_SU_OPTION 0xDEADBEEF

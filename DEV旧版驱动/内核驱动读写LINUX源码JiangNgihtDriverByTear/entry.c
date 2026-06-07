@@ -119,14 +119,14 @@ static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const ar
 	}
 	case OP_MODULE_BASE:
 	{
-		MODULE_BASE mb;
+		request req;
 		char name[0x100] = {0};
-		if (copy_from_user(&mb, (void __user *)arg, sizeof(mb)) != 0 || copy_from_user(name, (void __user *)mb.name, sizeof(name) - 1) != 0)
+		if (copy_from_user(&req, (void __user *)arg, sizeof(req)) != 0 || copy_from_user(name, (void __user *)req.buffer, sizeof(name) - 1) != 0)
 		{
 			return -1;
 		}
-		mb.base = get_module_base(mb.pid, name);
-		if (copy_to_user((void __user *)arg, &mb, sizeof(mb)) != 0)
+		req.addr = get_module_base(req.pid, name);
+		if (copy_to_user((void __user *)arg, &req, sizeof(req)) != 0)
 		{
 			return -1;
 		}
