@@ -46,7 +46,7 @@
 		return size == 0 || addr == 0 || addr + size < addr;
 	}
 
-	static bool teargame_check_vma(struct task_struct *task, uintptr_t addr, size_t size)
+	static bool teargame_check_vma(struct task_struct *task, uintptr_t addr, size_t size, vm_flags_t need_flags)
 	{
 		struct mm_struct *mm;
 		struct vm_area_struct *vma;
@@ -61,7 +61,8 @@
 	
 		mmap_read_lock(mm);
 		vma = find_vma(mm, addr);
-		if (vma && vma->vm_start <= addr && addr + size <= vma->vm_end)
+		if (vma && vma->vm_start <= addr && addr + size <= vma->vm_end &&
+			((vma->vm_flags & need_flags) == need_flags))
 			ok = true;
 		mmap_read_unlock(mm);
 	
@@ -89,7 +90,7 @@
 		if (!task)
 			return false;
 	
-		if (!teargame_check_vma(task, addr, size)) {
+		if (!teargame_check_vma(task, addr, size, VM_READ)) {
 			put_task_struct(task);
 			return false;
 		}
@@ -100,7 +101,7 @@
 			return false;
 		}
 	
-		bytes_read = access_process_vm(task, addr, kbuf, size, FOLL_FORCE);
+		bytes_read = access_process_vm(task, addr, kbuf, size, 0);
 		put_task_struct(task);
 	
 		if (bytes_read != size) {
@@ -140,7 +141,7 @@
 		if (!task)
 			return false;
 	
-		if (!teargame_check_vma(task, addr, size)) {
+		if (!teargame_check_vma(task, addr, size, VM_WRITE)) {
 			put_task_struct(task);
 			return false;
 		}
@@ -158,7 +159,7 @@
 			return false;
 		}
 	
-		bytes_written = access_process_vm(task, addr, kbuf, size, FOLL_FORCE | FOLL_WRITE);
+		bytes_written = access_process_vm(task, addr, kbuf, size, FOLL_WRITE);
 		put_task_struct(task);
 		if (kbuf != stack_buf)
 			kvfree(kbuf);
