@@ -1,0 +1,64 @@
+name: Build DEV old TearGame driver
+
+on:
+  workflow_dispatch:
+    inputs:
+      kmi:
+        description: "KMI to build"
+        required: true
+        default: "android14-6.1"
+        type: choice
+        options:
+          - android14-6.1
+
+jobs:
+  build:
+    name: Build ${{ inputs.kmi }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:${{ inputs.kmi }}-20260313
+      options: --privileged
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build module
+        shell: bash
+        run: |
+          set -euxo pipefail
+          moddir="$GITHUB_WORKSPACE/DEV旧版驱动/内核驱动读写LINUX源码JiangNgihtDriverByTear"
+          test -d "$moddir"
+          test -n "${KDIR:-}"
+          make -C "$KDIR" \
+            M="$moddir" \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            modules
+
+      - name: Collect artifact
+        shell: bash
+        run: |
+          set -euxo pipefail
+          moddir="$GITHUB_WORKSPACE/DEV旧版驱动/内核驱动读写LINUX源码JiangNgihtDriverByTear"
+          out="$GITHUB_WORKSPACE/out/${{ inputs.kmi }}"
+          mkdir -p "$out"
+          cp -v "$moddir/TearGame.ko" "$out/TearGame.ko"
+          cp -v "$moddir/TearGame.ko" "$out/TearGame-${{ inputs.kmi }}.ko"
+          cp -v "$moddir"/*.mod "$out/" 2>/dev/null || true
+          cp -v "$moddir"/*.mod.c "$out/" 2>/dev/null || true
+          cp -v "$moddir"/*.o "$out/" 2>/dev/null || true
+          cp -v "$moddir"/modules.order "$out/" 2>/dev/null || true
+          cp -v "$moddir"/Module.symvers "$out/" 2>/dev/null || true
+          if command -v llvm-strip >/dev/null 2>&1; then
+            llvm-strip -d "$out/TearGame.ko" || true
+            llvm-strip -d "$out/TearGame-${{ inputs.kmi }}.ko" || true
+          fi
+          find "$out" -maxdepth 1 -type f -print
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TearGame-${{ inputs.kmi }}
+          path: out/${{ inputs.kmi }}/
