@@ -26,6 +26,8 @@ obj-m := TearGame.o
 # 多文件模块，指定组成模块的目标文件
 TearGame-objs := entry.o memory.o process.o
 
+ccflags-y += -Wno-error -Wno-unused-function
+
 # 内核源码目录
 KDIR ?= $(HOME)/gki-kernel/common
 PWD := $(shell pwd)
