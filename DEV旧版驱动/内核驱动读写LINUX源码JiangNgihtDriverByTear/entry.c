@@ -40,6 +40,8 @@
 #include "process.h"
 #include "virtual_input.h"
 #include "linyu_gyro.h"
+#include "hide_process.h"
+#include "hide_kgsl.h"
 //原作者JiangNight  源码存在严重问题 加载格机 重启  黑砖    加载失败  kernel pacni 各种问题
 //泪心已经彻底修复优化
 	//printk(KERN_INFO "[TearGame] QQ: 2254013571\n");
@@ -80,11 +82,16 @@ struct teargame_hwbp_request
 #define DRA_TOUCH_MOVE _IOW('D', 18, struct virtual_input)
 #define DRA_TOUCH_UP _IOW('D', 19, struct virtual_input)
 #define DRA_GYRO_CONFIG _IOWR('D', 20, struct gyro_config)
+#define DRA_HIDE_SELF _IO('D', 21)
+#define DRA_UNHIDE_SELF _IO('D', 22)
 
 struct teargame_fd_ctx
 {
 	struct mutex lock;
+	pid_t owner_tgid;
 	bool hwbp_active;
+	bool hidden;
+	bool kgsl_hidden;
 	struct hwbp_info *bp_info;
 };
 
@@ -165,6 +172,17 @@ static void teargame_cleanup_ctx_locked(struct teargame_fd_ctx *ctx)
 	{
 		vfree(ctx->bp_info);
 		ctx->bp_info = NULL;
+	}
+
+	if (ctx->hidden)
+	{
+		hide_process_remove(ctx->owner_tgid);
+		ctx->hidden = false;
+	}
+	if (ctx->kgsl_hidden)
+	{
+		hide_kgsl_remove(ctx->owner_tgid);
+		ctx->kgsl_hidden = false;
 	}
 
 	mutex_lock(&teargame_touch_lock);
@@ -417,6 +435,52 @@ static long teargame_ioctl_gyro(unsigned long arg)
 	return status;
 }
 
+static long teargame_ioctl_hide(struct teargame_fd_ctx *ctx, unsigned int cmd)
+{
+	int status = 0;
+	int ret;
+
+	if (!ctx)
+		return -EINVAL;
+
+	mutex_lock(&ctx->lock);
+	switch (cmd)
+	{
+	case DRA_HIDE_SELF:
+		if (!ctx->hidden)
+		{
+			status = hide_process_install(ctx->owner_tgid);
+			if (!status)
+				ctx->hidden = true;
+		}
+		if (!ctx->kgsl_hidden)
+		{
+			ret = hide_kgsl_install(ctx->owner_tgid);
+			if (!ret)
+				ctx->kgsl_hidden = true;
+		}
+		break;
+	case DRA_UNHIDE_SELF:
+		if (ctx->hidden)
+		{
+			hide_process_remove(ctx->owner_tgid);
+			ctx->hidden = false;
+		}
+		if (ctx->kgsl_hidden)
+		{
+			hide_kgsl_remove(ctx->owner_tgid);
+			ctx->kgsl_hidden = false;
+		}
+		break;
+	default:
+		status = -ENOTTY;
+		break;
+	}
+	mutex_unlock(&ctx->lock);
+
+	return status;
+}
+
 static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const arg)
 {
 	switch (cmd)
@@ -484,6 +548,8 @@ static long teargame_fd_ioctl(struct file *file, unsigned int cmd, unsigned long
 		return teargame_ioctl_touch(cmd, arg);
 	if (cmd == DRA_GYRO_CONFIG)
 		return teargame_ioctl_gyro(arg);
+	if (cmd == DRA_HIDE_SELF || cmd == DRA_UNHIDE_SELF)
+		return teargame_ioctl_hide(ctx, cmd);
 
 	return teargame_dispatch_cmd(cmd, arg);
 }
@@ -526,6 +592,7 @@ static int teargame_install_fd_to_user(int __user *outp)
 	if (!ctx)
 		return -ENOMEM;
 	mutex_init(&ctx->lock);
+	ctx->owner_tgid = current->tgid;
 
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0)
