@@ -36,49 +36,15 @@
 	#include <linux/sched/mm.h>
 	#include <linux/sched/task.h>
 	#include <linux/pid.h>
-	#include <linux/vmalloc.h>
-
-	#define TEARGAME_MAX_RW_SIZE (64 * 1024)
-	#define TEARGAME_STACK_RW_SIZE 256
-
-	static bool teargame_range_overflow(uintptr_t addr, size_t size)
-	{
-		return size == 0 || addr == 0 || addr + size < addr;
-	}
-
-	static bool teargame_check_vma(struct task_struct *task, uintptr_t addr, size_t size, vm_flags_t need_flags)
-	{
-		struct mm_struct *mm;
-		struct vm_area_struct *vma;
-		bool ok = false;
-	
-		if (!task || teargame_range_overflow(addr, size))
-			return false;
-	
-		mm = get_task_mm(task);
-		if (!mm)
-			return false;
-	
-		mmap_read_lock(mm);
-		vma = find_vma(mm, addr);
-		if (vma && vma->vm_start <= addr && addr + size <= vma->vm_end &&
-			((vma->vm_flags & need_flags) == need_flags))
-			ok = true;
-		mmap_read_unlock(mm);
-	
-		mmput(mm);
-		return ok;
-	}
 	
 	bool read_process_memory(pid_t pid, uintptr_t addr, void *buffer, size_t size)
 	{
 		struct task_struct *task;
 		struct pid *pid_struct;
 		int bytes_read;
-		unsigned char stack_buf[TEARGAME_STACK_RW_SIZE];
 		void *kbuf;
 	
-		if (teargame_range_overflow(addr, size) || size > TEARGAME_MAX_RW_SIZE)
+		if (size == 0 || size > (1024 * 1024)) // 限制最大1MB
 			return false;
 	
 		pid_struct = find_get_pid(pid);
@@ -90,34 +56,26 @@
 		if (!task)
 			return false;
 	
-		if (!teargame_check_vma(task, addr, size, VM_READ)) {
-			put_task_struct(task);
-			return false;
-		}
-	
-		kbuf = (size <= sizeof(stack_buf)) ? stack_buf : kvmalloc(size, GFP_KERNEL);
+		kbuf = kmalloc(size, GFP_KERNEL);
 		if (!kbuf) {
 			put_task_struct(task);
 			return false;
 		}
 	
-		bytes_read = access_process_vm(task, addr, kbuf, size, 0);
+		bytes_read = access_process_vm(task, addr, kbuf, size, FOLL_FORCE);
 		put_task_struct(task);
 	
 		if (bytes_read != size) {
-			if (kbuf != stack_buf)
-				kvfree(kbuf);
+			kfree(kbuf);
 			return false;
 		}
 	
 		if (copy_to_user(buffer, kbuf, size)) {
-			if (kbuf != stack_buf)
-				kvfree(kbuf);
+			kfree(kbuf);
 			return false;
 		}
 	
-		if (kbuf != stack_buf)
-			kvfree(kbuf);
+		kfree(kbuf);
 		return true;
 	}
 	
@@ -126,10 +84,9 @@
 		struct task_struct *task;
 		struct pid *pid_struct;
 		int bytes_written;
-		unsigned char stack_buf[TEARGAME_STACK_RW_SIZE];
 		void *kbuf;
 	
-		if (teargame_range_overflow(addr, size) || size > TEARGAME_MAX_RW_SIZE)
+		if (size == 0 || size > (1024 * 1024)) // 限制最大1MB
 			return false;
 	
 		pid_struct = find_get_pid(pid);
@@ -141,28 +98,21 @@
 		if (!task)
 			return false;
 	
-		if (!teargame_check_vma(task, addr, size, VM_WRITE)) {
-			put_task_struct(task);
-			return false;
-		}
-	
-		kbuf = (size <= sizeof(stack_buf)) ? stack_buf : kvmalloc(size, GFP_KERNEL);
+		kbuf = kmalloc(size, GFP_KERNEL);
 		if (!kbuf) {
 			put_task_struct(task);
 			return false;
 		}
 	
 		if (copy_from_user(kbuf, buffer, size)) {
-			if (kbuf != stack_buf)
-				kvfree(kbuf);
+			kfree(kbuf);
 			put_task_struct(task);
 			return false;
 		}
 	
-		bytes_written = access_process_vm(task, addr, kbuf, size, FOLL_WRITE);
+		bytes_written = access_process_vm(task, addr, kbuf, size, FOLL_FORCE | FOLL_WRITE);
 		put_task_struct(task);
-		if (kbuf != stack_buf)
-			kvfree(kbuf);
+		kfree(kbuf);
 	
 		return (bytes_written == size);
 	}
