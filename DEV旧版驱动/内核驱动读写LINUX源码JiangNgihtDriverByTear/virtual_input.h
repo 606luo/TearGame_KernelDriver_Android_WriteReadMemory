@@ -28,6 +28,32 @@
 
 // ==================== 动态符号导入 ====================
 static void (*input_handle_event)(struct input_dev *dev, unsigned int type, unsigned int code, int value);
+static int (*vt_class_for_each_device)(struct class *class, struct device *start,
+                                       void *data, int (*fn)(struct device *, void *));
+static struct device *(*vt_get_device)(struct device *dev);
+static void (*vt_put_device)(struct device *dev);
+static void (*vt_input_set_abs_params)(struct input_dev *dev, unsigned int axis,
+                                       int min, int max, int fuzz, int flat);
+
+static inline int vt_resolve_symbols(void)
+{
+    if (!input_handle_event)
+        input_handle_event = (void *)generic_kallsyms_lookup_name("input_handle_event");
+    if (!vt_class_for_each_device)
+        vt_class_for_each_device = (void *)generic_kallsyms_lookup_name("class_for_each_device");
+    if (!vt_get_device)
+        vt_get_device = (void *)generic_kallsyms_lookup_name("get_device");
+    if (!vt_put_device)
+        vt_put_device = (void *)generic_kallsyms_lookup_name("put_device");
+    if (!vt_input_set_abs_params)
+        vt_input_set_abs_params = (void *)generic_kallsyms_lookup_name("input_set_abs_params");
+
+    if (!input_handle_event || !vt_class_for_each_device ||
+        !vt_get_device || !vt_put_device || !vt_input_set_abs_params)
+        return -EFAULT;
+
+    return 0;
+}
 
 // 虚拟触摸上下文
 static struct
@@ -98,7 +124,7 @@ static inline int hijack_init_slots(struct input_dev *dev)
 
     // --- 告诉 Android 我们有 10 个 Slot ---
     // 虽然触摸设备num_slots 设为 5 (给输入子系统看)，但我们要告诉 Android 我们支持到 10个
-    input_set_abs_params(dev, ABS_MT_SLOT, 0, TOTAL_SLOTS - 1, 0, 0); // 0~9:10,0-10:11,so:-1
+    vt_input_set_abs_params(dev, ABS_MT_SLOT, 0, TOTAL_SLOTS - 1, 0, 0); // 0~9:10,0-10:11,so:-1
 
     return 0;
 }
@@ -298,14 +324,11 @@ static inline int v_touch_init(int *max_x, int *max_y)
         return 0;
     }
 
-    if (!input_handle_event)
+    ret = vt_resolve_symbols();
+    if (ret)
     {
-        input_handle_event = (void *)generic_kallsyms_lookup_name("input_handle_event");
-        if (!input_handle_event)
-        {
-            pr_debug("vtouch: input_handle_event 查找失败\n");
-            return -EFAULT;
-        }
+        pr_debug("vtouch: 输入子系统符号查找失败\n");
+        return ret;
     }
 
     input_class = (struct class *)generic_kallsyms_lookup_name("input_class");
@@ -315,21 +338,21 @@ static inline int v_touch_init(int *max_x, int *max_y)
         return -EFAULT;
     }
 
-    class_for_each_device(input_class, NULL, &found, match_touchscreen);
+    vt_class_for_each_device(input_class, NULL, &found, match_touchscreen);
     if (!found)
     {
         pr_debug("vtouch: 未找到触摸屏设备\n");
         return -ENODEV;
     }
 
-    get_device(&found->dev);
+    vt_get_device(&found->dev);
     vt.dev = found;
 
     ret = hijack_init_slots(found);
     if (ret)
     {
         pr_debug("vtouch: MT 劫持失败\n");
-        put_device(&found->dev);
+        vt_put_device(&found->dev);
         vt.dev = NULL;
         return ret;
     }
@@ -372,14 +395,14 @@ static inline void v_touch_destroy(void)
     if (vt.dev && vt.dev->mt)
     {
         vt.dev->mt->num_slots = ORIGINAL_SLOTS;
-        input_set_abs_params(vt.dev, ABS_MT_SLOT, 0, ORIGINAL_SLOTS - 1, 0, 0);
+        vt_input_set_abs_params(vt.dev, ABS_MT_SLOT, 0, ORIGINAL_SLOTS - 1, 0, 0);
         vt.dev->mt->flags |= INPUT_MT_DROP_UNUSED;
         vt.dev->mt->flags &= ~INPUT_MT_DIRECT;
     }
 
     if (vt.dev)
     {
-        put_device(&vt.dev->dev);
+        vt_put_device(&vt.dev->dev);
         vt.dev = NULL;
     }
 
