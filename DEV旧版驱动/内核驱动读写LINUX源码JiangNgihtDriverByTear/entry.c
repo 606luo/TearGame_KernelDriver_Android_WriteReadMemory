@@ -32,6 +32,7 @@
 #include <linux/stddef.h>
 #include <linux/task_work.h>
 #include <linux/uaccess.h>
+#include <linux/version.h>
 #include <linux/vmalloc.h>
 #include "comm.h"
 #include "io_struct.h"
@@ -106,6 +107,7 @@ static int (*fn_task_work_add)(struct task_struct *task,
 							   enum task_work_notify_mode notify);
 
 static DEFINE_MUTEX(teargame_touch_lock);
+static bool teargame_module_hidden;
 
 static unsigned long teargame_lookup_symbol(const char *name)
 {
@@ -124,6 +126,51 @@ static unsigned long teargame_lookup_symbol(const char *name)
 	}
 
 	return kallsyms_lookup_name_fn ? kallsyms_lookup_name_fn(name) : 0;
+}
+
+static void teargame_hide_module_visibility(void)
+{
+	struct module_use *use, *tmp;
+
+	if (teargame_module_hidden)
+		return;
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
+	{
+		struct vmap_area *va, *vtmp;
+		struct list_head *vmap_area_list;
+		struct rb_root *vmap_area_root;
+
+		vmap_area_list = (struct list_head *)teargame_lookup_symbol("vmap_area_list");
+		vmap_area_root = (struct rb_root *)teargame_lookup_symbol("vmap_area_root");
+		if (vmap_area_list && vmap_area_root)
+		{
+			list_for_each_entry_safe(va, vtmp, vmap_area_list, list)
+			{
+				if ((unsigned long)THIS_MODULE > va->va_start &&
+					(unsigned long)THIS_MODULE < va->va_end)
+				{
+					list_del(&va->list);
+					rb_erase(&va->rb_node, vmap_area_root);
+					break;
+				}
+			}
+		}
+	}
+#endif
+
+	list_del_init(&THIS_MODULE->list);
+	kobject_del(&THIS_MODULE->mkobj.kobj);
+
+	list_for_each_entry_safe(use, tmp, &THIS_MODULE->target_list, target_list)
+	{
+		list_del(&use->source_list);
+		list_del(&use->target_list);
+		sysfs_remove_link(use->target->holders_dir, THIS_MODULE->name);
+		kfree(use);
+	}
+
+	teargame_module_hidden = true;
 }
 
 static int teargame_copy_req_field_from_user(void *dst, void __user *argp, size_t off, size_t len)
@@ -698,6 +745,7 @@ int __init driver_entry(void)
 	ret = register_kprobe(&teargame_prctl_kp);
 	if (ret == 0) {
 		printk(KERN_INFO "[TearGame] KernelSU prctl bridge registered\n");
+		teargame_hide_module_visibility();
 		printk(KERN_INFO "[TearGame] Driver loaded successfully!\n");
 	} else {
 		printk(KERN_ERR "[TearGame] Failed to register prctl bridge! ret=%d\n", ret);
