@@ -43,6 +43,25 @@ static bool should_hide(void)
     }
     return false;
 }
+
+static bool kgsl_name_contains(const char *name)
+{
+    int i;
+
+    if (!name)
+        return false;
+
+    for (i = 0; name[i]; i++)
+    {
+        if (name[i] == 'k' &&
+            name[i + 1] == 'g' &&
+            name[i + 2] == 's' &&
+            name[i + 3] == 'l')
+            return true;
+    }
+    return false;
+}
+
 // 判断指定对象是否为kgsl下
 static bool kobj_under_kgsl(struct kobject *kobj)
 {
@@ -51,7 +70,7 @@ static bool kobj_under_kgsl(struct kobject *kobj)
 
     for (p = kobj->parent; p && depth < 8; p = p->parent, depth++)
     {
-        if (p->name && strstr(p->name, "kgsl"))
+        if (kgsl_name_contains(p->name))
             return true;
     }
     return false;

