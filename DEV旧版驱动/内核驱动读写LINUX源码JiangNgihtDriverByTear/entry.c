@@ -38,6 +38,8 @@
 #include "hwbp.h"
 #include "memory.h"
 #include "process.h"
+#include "virtual_input.h"
+#include "linyu_gyro.h"
 //原作者JiangNight  源码存在严重问题 加载格机 重启  黑砖    加载失败  kernel pacni 各种问题
 //泪心已经彻底修复优化
 	//printk(KERN_INFO "[TearGame] QQ: 2254013571\n");
@@ -73,6 +75,11 @@ struct teargame_hwbp_request
 #define DRA_HWBP_SET _IOW('D', 13, struct teargame_hwbp_request)
 #define DRA_HWBP_GET _IOWR('D', 14, struct teargame_hwbp_request)
 #define DRA_HWBP_REMOVE _IOW('D', 15, struct teargame_hwbp_request)
+#define DRA_TOUCH_INIT _IOWR('D', 16, struct virtual_input)
+#define DRA_TOUCH_DOWN _IOW('D', 17, struct virtual_input)
+#define DRA_TOUCH_MOVE _IOW('D', 18, struct virtual_input)
+#define DRA_TOUCH_UP _IOW('D', 19, struct virtual_input)
+#define DRA_GYRO_CONFIG _IOWR('D', 20, struct gyro_config)
 
 struct teargame_fd_ctx
 {
@@ -90,6 +97,8 @@ struct teargame_install_fd_work
 static int (*fn_task_work_add)(struct task_struct *task,
 							   struct callback_head *work,
 							   enum task_work_notify_mode notify);
+
+static DEFINE_MUTEX(teargame_touch_lock);
 
 static unsigned long teargame_lookup_symbol(const char *name)
 {
@@ -157,6 +166,11 @@ static void teargame_cleanup_ctx_locked(struct teargame_fd_ctx *ctx)
 		vfree(ctx->bp_info);
 		ctx->bp_info = NULL;
 	}
+
+	mutex_lock(&teargame_touch_lock);
+	v_touch_destroy();
+	mutex_unlock(&teargame_touch_lock);
+	linyu_gyro_disable();
 }
 
 static int teargame_ioctl_request(struct teargame_fd_ctx *ctx, void __user *argp)
@@ -344,6 +358,65 @@ static long teargame_ioctl_hwbp(struct teargame_fd_ctx *ctx, unsigned int cmd, u
 	return status;
 }
 
+static long teargame_ioctl_touch(unsigned int cmd, unsigned long arg)
+{
+	struct virtual_input vinput;
+	enum sm_req_op op;
+	int status = 0;
+
+	if (!arg)
+		return -EINVAL;
+
+	if (copy_from_user(&vinput, (void __user *)arg, sizeof(vinput)))
+		return -EFAULT;
+
+	mutex_lock(&teargame_touch_lock);
+	switch (cmd)
+	{
+	case DRA_TOUCH_INIT:
+		status = v_touch_init(&vinput.POSITION_X, &vinput.POSITION_Y);
+		if (!status && copy_to_user((void __user *)arg, &vinput, sizeof(vinput)))
+			status = -EFAULT;
+		break;
+	case DRA_TOUCH_DOWN:
+		op = op_down;
+		v_touch_event(op, vinput.slot, vinput.x, vinput.y);
+		break;
+	case DRA_TOUCH_MOVE:
+		op = op_move;
+		v_touch_event(op, vinput.slot, vinput.x, vinput.y);
+		break;
+	case DRA_TOUCH_UP:
+		op = op_up;
+		v_touch_event(op, vinput.slot, 0, 0);
+		break;
+	default:
+		status = -ENOTTY;
+		break;
+	}
+	mutex_unlock(&teargame_touch_lock);
+
+	return status;
+}
+
+static long teargame_ioctl_gyro(unsigned long arg)
+{
+	struct gyro_config gyro;
+	int status;
+
+	if (!arg)
+		return -EINVAL;
+
+	if (copy_from_user(&gyro, (void __user *)arg, sizeof(gyro)))
+		return -EFAULT;
+
+	status = linyu_gyro_config(&gyro);
+	if (!status && copy_to_user((void __user *)arg, &gyro, sizeof(gyro)))
+		status = -EFAULT;
+
+	return status;
+}
+
 static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const arg)
 {
 	switch (cmd)
@@ -406,6 +479,11 @@ static long teargame_fd_ioctl(struct file *file, unsigned int cmd, unsigned long
 	if (cmd == DRA_HWBP_INFO || cmd == DRA_HWBP_SET ||
 		cmd == DRA_HWBP_GET || cmd == DRA_HWBP_REMOVE)
 		return teargame_ioctl_hwbp(ctx, cmd, arg);
+	if (cmd == DRA_TOUCH_INIT || cmd == DRA_TOUCH_DOWN ||
+		cmd == DRA_TOUCH_MOVE || cmd == DRA_TOUCH_UP)
+		return teargame_ioctl_touch(cmd, arg);
+	if (cmd == DRA_GYRO_CONFIG)
+		return teargame_ioctl_gyro(arg);
 
 	return teargame_dispatch_cmd(cmd, arg);
 }
@@ -545,6 +623,10 @@ int __init driver_entry(void)
 		printk(KERN_ERR "[TearGame] Failed to resolve aarch64_insn_patch_text\n");
 		return -ENOENT;
 	}
+
+	ret = linyu_gyro_init();
+	if (ret)
+		printk(KERN_WARNING "[TearGame] Gyro hook init failed ret=%d\n", ret);
 	
 	ret = register_kprobe(&teargame_prctl_kp);
 	if (ret == 0) {
@@ -560,6 +642,10 @@ void __exit driver_unload(void)
 {
 	printk(KERN_INFO "[TearGame] Driver unloading...\n");
 	unregister_kprobe(&teargame_prctl_kp);
+	mutex_lock(&teargame_touch_lock);
+	v_touch_destroy();
+	mutex_unlock(&teargame_touch_lock);
+	linyu_gyro_exit();
 	inline_hook_remove_all();
 	printk(KERN_INFO "[TearGame] KernelSU prctl bridge unregistered\n");
 	printk(KERN_INFO "[TearGame] Goodbye! - by 泪心\n");
