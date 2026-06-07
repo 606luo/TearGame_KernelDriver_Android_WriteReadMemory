@@ -1,4 +1,4 @@
-name: Build DEV old TearGame driver
+name: Build DEV old DraKernel driver
 
 on:
   workflow_dispatch:
@@ -44,21 +44,21 @@ jobs:
           moddir="$GITHUB_WORKSPACE/DEV旧版驱动/内核驱动读写LINUX源码JiangNgihtDriverByTear"
           out="$GITHUB_WORKSPACE/out/${{ inputs.kmi }}"
           mkdir -p "$out"
-          cp -v "$moddir/TearGame.ko" "$out/TearGame.ko"
-          cp -v "$moddir/TearGame.ko" "$out/TearGame-${{ inputs.kmi }}.ko"
+          cp -v "$moddir/DraKernel.ko" "$out/DraKernel.ko"
+          cp -v "$moddir/DraKernel.ko" "$out/DraKernel-${{ inputs.kmi }}.ko"
           cp -v "$moddir"/*.mod "$out/" 2>/dev/null || true
           cp -v "$moddir"/*.mod.c "$out/" 2>/dev/null || true
           cp -v "$moddir"/*.o "$out/" 2>/dev/null || true
           cp -v "$moddir"/modules.order "$out/" 2>/dev/null || true
           cp -v "$moddir"/Module.symvers "$out/" 2>/dev/null || true
           if command -v llvm-strip >/dev/null 2>&1; then
-            llvm-strip -d "$out/TearGame.ko" || true
-            llvm-strip -d "$out/TearGame-${{ inputs.kmi }}.ko" || true
+            llvm-strip -d "$out/DraKernel.ko" || true
+            llvm-strip -d "$out/DraKernel-${{ inputs.kmi }}.ko" || true
           fi
           find "$out" -maxdepth 1 -type f -print
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TearGame-${{ inputs.kmi }}
+          name: DraKernel-${{ inputs.kmi }}
           path: out/${{ inputs.kmi }}/

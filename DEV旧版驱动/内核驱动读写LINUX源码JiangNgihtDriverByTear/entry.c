@@ -61,10 +61,10 @@
 #define TEARGAME_PT_REGS_ARG3(pt) ((pt)->regs[2])
 #define TEARGAME_PT_REGS_ARG5(pt) ((pt)->regs[4])
 #else
-#error "TearGame only supports arm64"
+#error "DraKernel only supports arm64"
 #endif
 
-#define TEARGAME_FD_NAME "[TearGame]"
+#define TEARGAME_FD_NAME "[DraKernel]"
 
 struct teargame_hwbp_request
 {
@@ -699,7 +699,7 @@ static void teargame_install_fd_work_func(struct callback_head *cb)
 	int fd = teargame_install_fd_to_user(work->outp);
 
 	if (fd < 0 && work->outp && copy_to_user(work->outp, &fd, sizeof(fd)))
-		pr_debug("[TearGame] failed to copy fd install error: %d\n", fd);
+		pr_debug("[DraKernel] failed to copy fd install error: %d\n", fd);
 
 	kfree(work);
 }
@@ -743,57 +743,57 @@ int __init driver_entry(void)
 {
 	int ret;
 	printk(KERN_INFO "=============================================\n");
-	printk(KERN_INFO "[TearGame] Driver loading...\n");
-	printk(KERN_INFO "[TearGame] Author: 泪心 (Tear)\n");
-	printk(KERN_INFO "[TearGame] QQ: 2254013571\n");
-	printk(KERN_INFO "[TearGame] Email: tearhacker@outlook.com\n");
-	printk(KERN_INFO "[TearGame] Telegram: t.me/TearGame\n");
-	printk(KERN_INFO "[TearGame] GitHub: github.com/tearhacker\n");
+	printk(KERN_INFO "[DraKernel] Driver loading...\n");
+	printk(KERN_INFO "[DraKernel] Author: 泪心 (Tear)\n");
+	printk(KERN_INFO "[DraKernel] QQ: 2254013571\n");
+	printk(KERN_INFO "[DraKernel] Email: tearhacker@outlook.com\n");
+	printk(KERN_INFO "[DraKernel] Telegram: t.me/TearGame\n");
+	printk(KERN_INFO "[DraKernel] GitHub: github.com/tearhacker\n");
 	printk(KERN_INFO "=============================================\n");
 
 	fn_task_work_add = (void *)teargame_lookup_symbol("task_work_add");
 	if (!fn_task_work_add) {
-		printk(KERN_ERR "[TearGame] Failed to resolve task_work_add\n");
+		printk(KERN_ERR "[DraKernel] Failed to resolve task_work_add\n");
 		return -ENOENT;
 	}
 
 	fn_aarch64_insn_patch_text = (void *)teargame_lookup_symbol("aarch64_insn_patch_text");
 	if (!fn_aarch64_insn_patch_text) {
-		printk(KERN_ERR "[TearGame] Failed to resolve aarch64_insn_patch_text\n");
+		printk(KERN_ERR "[DraKernel] Failed to resolve aarch64_insn_patch_text\n");
 		return -ENOENT;
 	}
 
 	ret = linyu_gyro_init();
 	if (ret)
-		printk(KERN_WARNING "[TearGame] Gyro hook init failed ret=%d\n", ret);
+		printk(KERN_WARNING "[DraKernel] Gyro hook init failed ret=%d\n", ret);
 	
 	ret = register_kprobe(&teargame_prctl_kp);
 	if (ret == 0) {
-		printk(KERN_INFO "[TearGame] KernelSU prctl bridge registered\n");
+		printk(KERN_INFO "[DraKernel] KernelSU prctl bridge registered\n");
 		teargame_hide_module_visibility();
-		printk(KERN_INFO "[TearGame] Driver loaded successfully!\n");
+		printk(KERN_INFO "[DraKernel] Driver loaded successfully!\n");
 	} else {
-		printk(KERN_ERR "[TearGame] Failed to register prctl bridge! ret=%d\n", ret);
+		printk(KERN_ERR "[DraKernel] Failed to register prctl bridge! ret=%d\n", ret);
 	}
 	return ret;
 }
 
 void __exit driver_unload(void)
 {
-	printk(KERN_INFO "[TearGame] Driver unloading...\n");
+	printk(KERN_INFO "[DraKernel] Driver unloading...\n");
 	unregister_kprobe(&teargame_prctl_kp);
 	mutex_lock(&teargame_touch_lock);
 	v_touch_destroy();
 	mutex_unlock(&teargame_touch_lock);
 	linyu_gyro_exit();
 	inline_hook_remove_all();
-	printk(KERN_INFO "[TearGame] KernelSU prctl bridge unregistered\n");
-	printk(KERN_INFO "[TearGame] Goodbye! - by 泪心\n");
+	printk(KERN_INFO "[DraKernel] KernelSU prctl bridge unregistered\n");
+	printk(KERN_INFO "[DraKernel] Goodbye! - by 泪心\n");
 }
 
 module_init(driver_entry);
 module_exit(driver_unload);
 
-MODULE_DESCRIPTION("TearGame Memory Driver - t.me/TearGame");
+MODULE_DESCRIPTION("DraKernel Memory Driver");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("泪心 QQ:2254013571");

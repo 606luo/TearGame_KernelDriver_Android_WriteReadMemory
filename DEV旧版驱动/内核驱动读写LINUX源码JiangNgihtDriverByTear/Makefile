@@ -17,14 +17,14 @@
 # Those who maliciously profit will bear legal responsibility
 # ============================================================================
 #
-# TearGame Driver Makefile
+# DraKernel Driver Makefile
 #
 
 # 模块名称 - 使用 obj-m 编译为可加载模块
-obj-m := TearGame.o
+obj-m := DraKernel.o
 
 # 多文件模块，指定组成模块的目标文件
-TearGame-objs := entry.o memory.o process.o
+DraKernel-objs := entry.o memory.o process.o
 
 ccflags-y += -Wno-error -Wno-unused-function
 
