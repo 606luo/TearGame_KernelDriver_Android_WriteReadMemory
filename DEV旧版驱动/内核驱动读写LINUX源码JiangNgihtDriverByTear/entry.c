@@ -61,6 +61,19 @@
 
 #define TEARGAME_FD_NAME "[TearGame]"
 
+struct teargame_hwbp_request
+{
+	pid_t pid;
+	uint64_t num_brps;
+	uint64_t num_wrps;
+	uint64_t info;
+};
+
+#define DRA_HWBP_INFO _IOWR('D', 12, struct teargame_hwbp_request)
+#define DRA_HWBP_SET _IOW('D', 13, struct teargame_hwbp_request)
+#define DRA_HWBP_GET _IOWR('D', 14, struct teargame_hwbp_request)
+#define DRA_HWBP_REMOVE _IOW('D', 15, struct teargame_hwbp_request)
+
 struct teargame_fd_ctx
 {
 	struct mutex lock;
@@ -246,6 +259,91 @@ static int teargame_ioctl_request(struct teargame_fd_ctx *ctx, void __user *argp
 	return teargame_finish_request(argp, status);
 }
 
+static long teargame_ioctl_hwbp(struct teargame_fd_ctx *ctx, unsigned int cmd, unsigned long arg)
+{
+	struct teargame_hwbp_request req;
+	struct hwbp_info __user *uinfo;
+	int status = 0;
+
+	if (!ctx || !arg)
+		return -EINVAL;
+
+	if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
+		return -EFAULT;
+
+	uinfo = (struct hwbp_info __user *)(uintptr_t)req.info;
+
+	mutex_lock(&ctx->lock);
+	switch (cmd)
+	{
+	case DRA_HWBP_INFO:
+		req.num_brps = get_brps_num();
+		req.num_wrps = get_wrps_num();
+		if (copy_to_user((void __user *)arg, &req, sizeof(req)))
+		{
+			mutex_unlock(&ctx->lock);
+			return -EFAULT;
+		}
+		break;
+	case DRA_HWBP_SET:
+		if (req.pid <= 0 || !uinfo)
+		{
+			status = -EINVAL;
+			break;
+		}
+
+		if (!ctx->bp_info)
+		{
+			ctx->bp_info = vzalloc(sizeof(*ctx->bp_info));
+			if (!ctx->bp_info)
+			{
+				status = -ENOMEM;
+				break;
+			}
+		}
+
+		if (copy_from_user(ctx->bp_info, uinfo, sizeof(*ctx->bp_info)))
+		{
+			status = -EFAULT;
+			break;
+		}
+
+		if (ctx->hwbp_active)
+		{
+			remove_process_hwbp();
+			ctx->hwbp_active = false;
+		}
+
+		status = set_process_hwbp(req.pid, ctx->bp_info);
+		if (!status)
+			ctx->hwbp_active = true;
+		break;
+	case DRA_HWBP_GET:
+		if (!uinfo)
+		{
+			status = -EINVAL;
+			break;
+		}
+		if (!ctx->bp_info)
+		{
+			status = -ENOENT;
+			break;
+		}
+		if (copy_to_user(uinfo, ctx->bp_info, sizeof(*ctx->bp_info)))
+			status = -EFAULT;
+		break;
+	case DRA_HWBP_REMOVE:
+		teargame_cleanup_ctx_locked(ctx);
+		break;
+	default:
+		status = -ENOTTY;
+		break;
+	}
+	mutex_unlock(&ctx->lock);
+
+	return status;
+}
+
 static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const arg)
 {
 	switch (cmd)
@@ -305,6 +403,9 @@ static long teargame_fd_ioctl(struct file *file, unsigned int cmd, unsigned long
 
 	if (cmd == DRA_IOCTL_REQUEST)
 		return teargame_ioctl_request(ctx, (void __user *)arg);
+	if (cmd == DRA_HWBP_INFO || cmd == DRA_HWBP_SET ||
+		cmd == DRA_HWBP_GET || cmd == DRA_HWBP_REMOVE)
+		return teargame_ioctl_hwbp(ctx, cmd, arg);
 
 	return teargame_dispatch_cmd(cmd, arg);
 }
