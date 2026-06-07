@@ -114,8 +114,9 @@ static int teargame_prctl_handler_pre(struct kprobe *p, struct pt_regs *regs)
 	if (option != KERNEL_SU_OPTION)
 		return 0;
 
-	if (teargame_dispatch_cmd((unsigned int)cmd, arg3) == 0 && arg5)
-		copy_to_user((void __user *)arg5, &reply, sizeof(reply));
+	if (teargame_dispatch_cmd((unsigned int)cmd, arg3) == 0 && arg5 &&
+		copy_to_user((void __user *)arg5, &reply, sizeof(reply)) != 0)
+		pr_debug("[TearGame] failed to copy KernelSU prctl reply\n");
 
 	return 0;
 }
