@@ -27,10 +27,15 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kprobes.h>
+#include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/stddef.h>
 #include <linux/task_work.h>
 #include <linux/uaccess.h>
+#include <linux/vmalloc.h>
 #include "comm.h"
+#include "io_struct.h"
+#include "hwbp.h"
 #include "memory.h"
 #include "process.h"
 //原作者JiangNight  源码存在严重问题 加载格机 重启  黑砖    加载失败  kernel pacni 各种问题
@@ -55,6 +60,13 @@
 #endif
 
 #define TEARGAME_FD_NAME "[TearGame]"
+
+struct teargame_fd_ctx
+{
+	struct mutex lock;
+	bool hwbp_active;
+	struct hwbp_info *bp_info;
+};
 
 struct teargame_install_fd_work
 {
@@ -83,6 +95,155 @@ static unsigned long teargame_lookup_symbol(const char *name)
 	}
 
 	return kallsyms_lookup_name_fn ? kallsyms_lookup_name_fn(name) : 0;
+}
+
+static int teargame_copy_req_field_from_user(void *dst, void __user *argp, size_t off, size_t len)
+{
+	if (copy_from_user(dst, (char __user *)argp + off, len))
+		return -EFAULT;
+	return 0;
+}
+
+static int teargame_copy_req_field_to_user(void __user *argp, size_t off, const void *src, size_t len)
+{
+	if (copy_to_user((char __user *)argp + off, src, len))
+		return -EFAULT;
+	return 0;
+}
+
+static int teargame_finish_request(void __user *argp, int status)
+{
+	bool kernel_done = false;
+	bool user_done = true;
+	int ret;
+
+	ret = teargame_copy_req_field_to_user(argp, offsetof(struct req_obj, status), &status, sizeof(status));
+	if (ret)
+		return ret;
+
+	ret = teargame_copy_req_field_to_user(argp, offsetof(struct req_obj, kernel), &kernel_done, sizeof(kernel_done));
+	if (ret)
+		return ret;
+
+	return teargame_copy_req_field_to_user(argp, offsetof(struct req_obj, user), &user_done, sizeof(user_done));
+}
+
+static void teargame_cleanup_ctx_locked(struct teargame_fd_ctx *ctx)
+{
+	if (!ctx)
+		return;
+
+	if (ctx->hwbp_active)
+	{
+		remove_process_hwbp();
+		ctx->hwbp_active = false;
+	}
+
+	if (ctx->bp_info)
+	{
+		vfree(ctx->bp_info);
+		ctx->bp_info = NULL;
+	}
+}
+
+static int teargame_ioctl_request(struct teargame_fd_ctx *ctx, void __user *argp)
+{
+	enum sm_req_op op;
+	int pid;
+	int status = 0;
+	int ret;
+
+	if (!ctx || !argp)
+		return -EINVAL;
+
+	ret = teargame_copy_req_field_from_user(&op, argp, offsetof(struct req_obj, op), sizeof(op));
+	if (ret)
+		return ret;
+
+	ret = teargame_copy_req_field_from_user(&pid, argp, offsetof(struct req_obj, pid), sizeof(pid));
+	if (ret)
+		return ret;
+
+	mutex_lock(&ctx->lock);
+	switch (op)
+	{
+	case op_brps_weps_info:
+	{
+		uint64_t num_brps = get_brps_num();
+		uint64_t num_wrps = get_wrps_num();
+
+		ret = teargame_copy_req_field_to_user(argp,
+											  offsetof(struct req_obj, bp_info) + offsetof(struct hwbp_info, num_brps),
+											  &num_brps, sizeof(num_brps));
+		if (ret)
+		{
+			mutex_unlock(&ctx->lock);
+			return ret;
+		}
+
+		ret = teargame_copy_req_field_to_user(argp,
+											  offsetof(struct req_obj, bp_info) + offsetof(struct hwbp_info, num_wrps),
+											  &num_wrps, sizeof(num_wrps));
+		if (ret)
+		{
+			mutex_unlock(&ctx->lock);
+			return ret;
+		}
+		break;
+	}
+	case op_set_process_hwbp:
+		if (!ctx->bp_info)
+		{
+			ctx->bp_info = vzalloc(sizeof(*ctx->bp_info));
+			if (!ctx->bp_info)
+			{
+				status = -ENOMEM;
+				break;
+			}
+		}
+
+		ret = teargame_copy_req_field_from_user(ctx->bp_info, argp, offsetof(struct req_obj, bp_info), sizeof(*ctx->bp_info));
+		if (ret)
+		{
+			mutex_unlock(&ctx->lock);
+			return ret;
+		}
+
+		if (ctx->hwbp_active)
+		{
+			remove_process_hwbp();
+			ctx->hwbp_active = false;
+		}
+
+		status = set_process_hwbp(pid, ctx->bp_info);
+		if (!status)
+			ctx->hwbp_active = true;
+		break;
+	case op_get_process_hwbp:
+		if (!ctx->bp_info)
+		{
+			status = -ENOENT;
+			break;
+		}
+
+		ret = teargame_copy_req_field_to_user(argp, offsetof(struct req_obj, bp_info), ctx->bp_info, sizeof(*ctx->bp_info));
+		if (ret)
+		{
+			mutex_unlock(&ctx->lock);
+			return ret;
+		}
+		break;
+	case op_remove_process_hwbp:
+	case op_kexit:
+		teargame_cleanup_ctx_locked(ctx);
+		break;
+	default:
+		status = -EOPNOTSUPP;
+		break;
+	}
+	mutex_unlock(&ctx->lock);
+
+	return teargame_finish_request(argp, status);
 }
 
 static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const arg)
@@ -140,8 +301,28 @@ static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const ar
 
 static long teargame_fd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	(void)file;
+	struct teargame_fd_ctx *ctx = file->private_data;
+
+	if (cmd == DRA_IOCTL_REQUEST)
+		return teargame_ioctl_request(ctx, (void __user *)arg);
+
 	return teargame_dispatch_cmd(cmd, arg);
+}
+
+static int teargame_fd_release(struct inode *inode, struct file *file)
+{
+	struct teargame_fd_ctx *ctx = file->private_data;
+
+	(void)inode;
+	if (ctx)
+	{
+		mutex_lock(&ctx->lock);
+		teargame_cleanup_ctx_locked(ctx);
+		mutex_unlock(&ctx->lock);
+		kfree(ctx);
+		file->private_data = NULL;
+	}
+	return 0;
 }
 
 static const struct file_operations teargame_fops = {
@@ -150,25 +331,36 @@ static const struct file_operations teargame_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = teargame_fd_ioctl,
 #endif
+	.release = teargame_fd_release,
 };
 
 static int teargame_install_fd_to_user(int __user *outp)
 {
+	struct teargame_fd_ctx *ctx;
 	struct file *filp;
 	int fd;
 
 	if (!outp)
 		return -EINVAL;
 
+	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
+	if (!ctx)
+		return -ENOMEM;
+	mutex_init(&ctx->lock);
+
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0)
+	{
+		kfree(ctx);
 		return fd;
+	}
 
-	filp = anon_inode_getfile(TEARGAME_FD_NAME, &teargame_fops, NULL, O_RDWR | O_CLOEXEC);
+	filp = anon_inode_getfile(TEARGAME_FD_NAME, &teargame_fops, ctx, O_RDWR | O_CLOEXEC);
 	if (IS_ERR(filp))
 	{
 		int ret = PTR_ERR(filp);
 		put_unused_fd(fd);
+		kfree(ctx);
 		return ret;
 	}
 
@@ -246,6 +438,12 @@ int __init driver_entry(void)
 		printk(KERN_ERR "[TearGame] Failed to resolve task_work_add\n");
 		return -ENOENT;
 	}
+
+	fn_aarch64_insn_patch_text = (void *)teargame_lookup_symbol("aarch64_insn_patch_text");
+	if (!fn_aarch64_insn_patch_text) {
+		printk(KERN_ERR "[TearGame] Failed to resolve aarch64_insn_patch_text\n");
+		return -ENOENT;
+	}
 	
 	ret = register_kprobe(&teargame_prctl_kp);
 	if (ret == 0) {
@@ -261,6 +459,7 @@ void __exit driver_unload(void)
 {
 	printk(KERN_INFO "[TearGame] Driver unloading...\n");
 	unregister_kprobe(&teargame_prctl_kp);
+	inline_hook_remove_all();
 	printk(KERN_INFO "[TearGame] KernelSU prctl bridge unregistered\n");
 	printk(KERN_INFO "[TearGame] Goodbye! - by 泪心\n");
 }

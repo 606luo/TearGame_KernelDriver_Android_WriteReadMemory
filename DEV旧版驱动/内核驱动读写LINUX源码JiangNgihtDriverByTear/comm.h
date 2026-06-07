@@ -37,6 +37,7 @@ typedef request COPY_MEMORY, *PCOPY_MEMORY;
 #define MODULE_BSS _IOW(DRA_MARK, 3, request)
 #define READ_MEM _IOW(DRA_MARK, 4, request)
 #define WRITE_MEM _IOW(DRA_MARK, 5, request)
+#define DRA_IOCTL_REQUEST _IOC(_IOC_READ | _IOC_WRITE, DRA_MARK, 11, 0)
 
 enum OPERATIONS
 {
