@@ -62,6 +62,29 @@ struct teargame_install_fd_work
 	int __user *outp;
 };
 
+static int (*fn_task_work_add)(struct task_struct *task,
+							   struct callback_head *work,
+							   enum task_work_notify_mode notify);
+
+static unsigned long teargame_lookup_symbol(const char *name)
+{
+	typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
+	static kallsyms_lookup_name_t kallsyms_lookup_name_fn;
+	struct kprobe kp = {
+		.symbol_name = "kallsyms_lookup_name",
+	};
+
+	if (!kallsyms_lookup_name_fn)
+	{
+		if (register_kprobe(&kp) != 0)
+			return 0;
+		kallsyms_lookup_name_fn = (kallsyms_lookup_name_t)kp.addr;
+		unregister_kprobe(&kp);
+	}
+
+	return kallsyms_lookup_name_fn ? kallsyms_lookup_name_fn(name) : 0;
+}
+
 static long teargame_dispatch_cmd(unsigned int const cmd, unsigned long const arg)
 {
 	switch (cmd)
@@ -194,7 +217,7 @@ static int teargame_prctl_handler_pre(struct kprobe *p, struct pt_regs *regs)
 		work->outp = (int __user *)arg3;
 		work->cb.func = teargame_install_fd_work_func;
 
-		if (task_work_add(current, &work->cb, TWA_RESUME))
+		if (!fn_task_work_add || fn_task_work_add(current, &work->cb, TWA_RESUME))
 			kfree(work);
 	}
 
@@ -217,6 +240,12 @@ int __init driver_entry(void)
 	printk(KERN_INFO "[TearGame] Telegram: t.me/TearGame\n");
 	printk(KERN_INFO "[TearGame] GitHub: github.com/tearhacker\n");
 	printk(KERN_INFO "=============================================\n");
+
+	fn_task_work_add = (void *)teargame_lookup_symbol("task_work_add");
+	if (!fn_task_work_add) {
+		printk(KERN_ERR "[TearGame] Failed to resolve task_work_add\n");
+		return -ENOENT;
+	}
 	
 	ret = register_kprobe(&teargame_prctl_kp);
 	if (ret == 0) {
