@@ -3,7 +3,6 @@
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/device.h>
-#include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/version.h>
 #include <linux/compiler.h>
@@ -187,15 +186,11 @@ static inline void update_global_keys_locked(void)
 // 设置全局触摸按键锁定状态：locked=true 时拦住物理驱动的 BTN_TOUCH/BTN_TOOL_*。
 static void set_global_key_lock_state(struct input_dev *dev, bool locked)
 {
-    unsigned long flags;
-
     if (!dev)
         return;
 
-    spin_lock_irqsave(&dev->event_lock, flags);
     set_global_key_bits(dev, !locked);
     vt.global_keys_locked = locked;
-    spin_unlock_irqrestore(&dev->event_lock, flags);
 }
 
 // 调用者传 0–4，内部映射到硬件 slot 5–9
@@ -206,8 +201,6 @@ static inline int send_report(int vslot, int x, int y, bool touching)
     int hw_slot = VIRTUAL_SLOT_BASE + vslot;
     int tracking_id;
     int old_slot;
-    int retry;
-    unsigned long flags;
 
     if (!dev || !mt || !input_handle_event)
         return -ENODEV;
@@ -219,28 +212,6 @@ static inline int send_report(int vslot, int x, int y, bool touching)
         return -EINVAL;
 
     tracking_id = touching ? vt.tracking_ids[vslot] : -1;
-
-    /*
-    input_event() 会拿 dev->event_lock。
-    我们直接拿同一把锁，再调用 input_handle_event()，这样虚拟触摸的一整包事件不会被物理驱动插队。
-    */
-    for (retry = 0; retry < VTOUCH_REPORT_RETRY; retry++)
-    {
-        spin_lock_irqsave(&dev->event_lock, flags);
-
-        /*
-        dev->num_vals != 0 说明真实驱动可能已经写入了半帧事件但还没 SYN_REPORT。
-        这时强行注入会把真实半帧和虚拟帧混在一起，所以先让路，等真实驱动把当前帧收尾。
-        */
-        if (likely(dev->num_vals == 0))
-            break;
-
-        spin_unlock_irqrestore(&dev->event_lock, flags);
-        udelay(10);
-    }
-
-    if (retry == VTOUCH_REPORT_RETRY)
-        return -EAGAIN;
 
     // 记住当前物理驱动正在操作的 slot
     old_slot = mt->slot;
@@ -285,9 +256,6 @@ static inline int send_report(int vslot, int x, int y, bool touching)
 
     // 提交总帧
     input_handle_event(dev, EV_SYN, SYN_REPORT, 0);
-
-    // 释放锁，物理驱动安全醒来，此时活跃 slot 已经复原
-    spin_unlock_irqrestore(&dev->event_lock, flags);
 
     return 0;
 }
